@@ -38,6 +38,7 @@ typedef struct {
 	int step;
 	char *samples;
 	int n_samples;
+	int random_allele;
 } opt_t;
 
 typedef struct block {
@@ -119,7 +120,7 @@ hom_windows(opt_t *opt, char *vcf_fn)
 	int32_t last_chrom = -1, win_start = 0, chunk_start = 0;
 	int n_chunks = opt->window / opt->step;
 	block_t *blocklist;
-	block_t *b = blocklist;
+	block_t *b;
 	int bi = 0, bcount = 0;
 	int window_n = 0, window_hom = 0;
 
@@ -169,26 +170,42 @@ hom_windows(opt_t *opt, char *vcf_fn)
 
 		for (i=0; i<opt->n_samples; i++) {
 			int32_t *ptr = gt_arr + i*max_ploidy;
-			int gt;
+			int gt_list[max_ploidy];
 			for (j=0; j<max_ploidy; j++) {
-				// if true, the sample has smaller ploidy
-				if (ptr[j] == bcf_int32_vector_end)
-					break;
+				if (ptr[j] == bcf_int32_vector_end) {
+					fprintf(stderr, "%s: samples have differing ploidy at %s:%d\n",
+							vcf_fn, bcf_seqname(hdr, rec), rec->pos+1);
+					ret = -10;
+					goto err4;
+				}
 				// missing allele
 				if (bcf_gt_is_missing(ptr[j])) {
 					skip = 1;
 					break;
 				}
-				gt = bcf_gt_allele(ptr[j]);
-				if (gt0 == -1)
-					gt0 = gt;
-				else if (gt != gt0) {
-					hom = 0;
-					break;
-				}
+				gt_list[j] = bcf_gt_allele(ptr[j]);
 			}
 			if (skip)
 				break;
+
+			if (opt->random_allele) {
+				j = rand() % j;
+				if (gt0 == -1)
+					gt0 = gt_list[j];
+				else if (gt_list[j] != gt0) {
+					hom = 0;
+					break;
+				}
+			} else {
+				while (--j >= 0) {
+					if (gt0 == -1)
+						gt0 = gt_list[j];
+					else if (gt_list[j] != gt0) {
+						hom = 0;
+						break;
+					}
+				}
+			}
 		}
 		if (skip)
 			continue;
@@ -216,7 +233,6 @@ hom_windows(opt_t *opt, char *vcf_fn)
 				memset(blocklist, 0, n_chunks*sizeof(*blocklist));
 				last_chrom = rec->rid;
 				continue;
-
 			}
 
 			do {
@@ -324,6 +340,7 @@ usage(opt_t *opt, char *argv0)
 	fprintf(stderr, "                 Multiple samples may be specified, separated with a comma,\n");
 	fprintf(stderr, "                 in which case loci not segregating among the samples are\n");
 	fprintf(stderr, "                 counted as homozygous.\n");
+	fprintf(stderr, "  -r             Randomly take an allele from each sample [%s]\n", opt->random_allele?"true":"false");
 	fprintf(stderr, "  -h INT[,...]   Ignore sites with depth higher than INT [%d].\n", 1000);
 	fprintf(stderr, "                 If multiple samples are specified, comma separated max depths\n");
 	fprintf(stderr, "                 must be specified for each sample.\n");
@@ -348,7 +365,7 @@ main(int argc, char **argv)
 	opt.samples = NULL;
 	opt.n_samples = 1;
 
-	while ((c = getopt(argc, argv, "h:l:s:w:S:")) != -1) {
+	while ((c = getopt(argc, argv, "h:l:s:w:S:r")) != -1) {
 		switch (c) {
 			case 'h':
 				{
@@ -429,6 +446,9 @@ main(int argc, char **argv)
 					}
 				}
 				break;
+			case 'r':
+				opt.random_allele = 1;
+				break;
 			default:
 				usage(&opt, argv[0]);
 		}
@@ -473,6 +493,11 @@ main(int argc, char **argv)
 
 	if (len_min_depth != len_max_depth || len_min_depth != opt.n_samples) {
 		fprintf(stderr, "Error: must have: number of samples (-S) == length of min_depth (-l) == length of max_depth (-h)\n");
+		return -1;
+	}
+
+	if (opt.random_allele && opt.n_samples == 1) {
+		fprintf(stderr, "Error: -r specified, but only one sample would be used.\n");
 		return -1;
 	}
 
