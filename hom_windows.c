@@ -136,7 +136,7 @@ hom_windows(opt_t *opt, char *vcf_fn)
 
 		// ignore all but REF or SNP calls
 		if (!bcf_is_snp(rec) || bcf_get_info(hdr, rec, "INDEL"))
-				break;
+				continue;
 
 		if (bcf_get_format_int32(hdr, rec, "DP", &dp, &n_dp) < 0) {
 			fprintf(stderr, "%s: missing FORMAT/DP field at %s:%d\n",
